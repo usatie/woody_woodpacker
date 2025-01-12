@@ -3,6 +3,22 @@
 #include <stdio.h>
 #include <stdlib.h> // exit
 #include <stdint.h>
+#include <stdbool.h>
+
+#define EI_MAG0 0
+#define EI_MAG1 1
+#define EI_MAG2 2
+#define EI_MAG3 3
+#define EI_CLASS 4
+#define EI_DATA 5
+#define EI_VERSION 6
+#define EI_OSABI 7
+#define EI_ABIVERSION 8
+#define EI_PAD 9
+
+#define ELFCLASSNONE 0
+#define ELFCLASS32 1
+#define ELFCLASS64 2
 
 void usage_error() {
 	dprintf(STDERR_FILENO, "usage: ./woody_woodpacker filename\n");
@@ -49,6 +65,19 @@ void print_elf_header(ELFHeader *h) {
 	printf("e_shstrndx:  0x%x\n", h->e_shstrndx);
 }
 
+bool is_elf(ELFHeader *h) {
+	if (h->e_ident[EI_MAG0] != 0x7f) return false;
+	if (h->e_ident[EI_MAG1] != 'E') return false;
+	if (h->e_ident[EI_MAG2] != 'L') return false;
+	if (h->e_ident[EI_MAG3] != 'F') return false;
+	return true;
+}
+
+bool is_64bit(ELFHeader *h) {
+	if (h->e_ident[EI_CLASS] != ELFCLASS64) return false;
+	return true;
+}
+
 int main(int argc, char *argv[]) {
 	if (argc != 2) {
 		usage_error();
@@ -64,6 +93,14 @@ int main(int argc, char *argv[]) {
 	printf("rc = %d\n", rc);
 	ELFHeader *h = (ELFHeader *)buf;
 	print_elf_header(h);
+	if (!is_elf(h)) {
+		dprintf(STDERR_FILENO, "Not an ELF file\n");
+		exit(1);
+	}
+	if (!is_64bit(h)) {
+		dprintf(STDERR_FILENO, "File architecture not suported. x86_64 only\n");
+		exit(1);
+	}
 	close(fd);
 	return 0;
 }
