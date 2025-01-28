@@ -165,11 +165,13 @@ void do_pack_64bit() {
 int do_pack(const char *filename) {
   int fd = open(filename, O_RDONLY);
   if (fd < 0) {
-    ft_dprintf(STDERR_FILENO, "woody_woodpacker: '%s': %s\n", filename, strerror(errno));
+    ft_dprintf(STDERR_FILENO, "woody_woodpacker: '%s': %s\n", filename,
+               strerror(errno));
     goto error_exit_do_pack_fd;
   }
   if (fstat(fd, &st) < 0) {
-    ft_dprintf(STDERR_FILENO, "woody_woodpacker: '%s': %s\n", filename, strerror(errno));
+    ft_dprintf(STDERR_FILENO, "woody_woodpacker: '%s': %s\n", filename,
+               strerror(errno));
     goto error_exit_do_pack_fd;
   }
   if (st.st_size == 0) { // Empty file is valid
@@ -217,7 +219,8 @@ int do_pack(const char *filename) {
   const char *new_filename = ft_strjoin(filename, ".packed");
   int ofd = open(new_filename, O_CREAT | O_WRONLY | O_TRUNC, 0744);
   if (ofd < 0) {
-    ft_dprintf(STDERR_FILENO, "woody_woodpacker: '%s': %s\n", new_filename, strerror(errno));
+    ft_dprintf(STDERR_FILENO, "woody_woodpacker: '%s': %s\n", new_filename,
+               strerror(errno));
     goto error_exit_do_pack_ofd;
   }
   write(ofd, packed, packed_size); // TODO: handle partial write
