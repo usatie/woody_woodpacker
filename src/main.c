@@ -201,9 +201,32 @@ int do_pack(const char *filename) {
     ft_dprintf(STDERR_FILENO, "Invalid ELF class value.\n");
     goto error_exit_do_pack_mmap;
   }
+
+  // Copy the file to a buffer
+  size_t packed_size = st.st_size;
+  unsigned char *packed = malloc(packed_size);
+  if (packed == NULL) {
+    ft_dprintf(STDERR_FILENO, "malloc failed.\n");
+    goto error_exit_do_pack_mmap;
+  }
+  ft_memcpy(packed, map, st.st_size);
+
+  // TODO: pack the file
+
+  // Write to new file
+  const char *new_filename = ft_strjoin(filename, ".packed");
+  int ofd = open(new_filename, O_CREAT | O_WRONLY | O_TRUNC, 0744);
+  if (ofd < 0) {
+    ft_dprintf(STDERR_FILENO, "woody_woodpacker: '%s': %s\n", new_filename, strerror(errno));
+    goto error_exit_do_pack_ofd;
+  }
+  write(ofd, packed, packed_size); // TODO: handle partial write
+  close(ofd);
   close(fd);
   munmap(map, st.st_size);
   return 0;
+error_exit_do_pack_ofd:
+  close(ofd);
 error_exit_do_pack_mmap:
   munmap(map, st.st_size);
 error_exit_do_pack_fd:
