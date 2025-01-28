@@ -28,5 +28,10 @@ dbuild:
 drun:
 	docker run --rm -it --platform=linux/amd64 amd64-woody-woodpacker bash
 
+test: all
+	$(MAKE) run -C test
+
 $(LIBFT):
 	$(MAKE) -C libft
+
+.PHONY: all clean fclean re dbuild drun test
