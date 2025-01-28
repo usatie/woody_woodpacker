@@ -5,3 +5,8 @@ all:
 
 run: all
 	./hello
+
+clean:
+	$(RM) empty putc hello
+
+re: clean all
