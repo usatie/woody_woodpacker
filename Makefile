@@ -3,11 +3,16 @@ CC=cc
 CFLAGS=-Wall -Werror -Wextra
 SRCS=$(wildcard src/*.c)
 OBJS=$(SRCS:%.c=%.o)
+INC=-I./include -I./libft/include
+LIBFT=libft/libft.a
 
 all: $(NAME)
 
-$(NAME): $(OBJS)
-	$(CC) -o $(NAME) $(OBJS) $(CFLAGS)
+$(NAME): $(LIBFT) $(OBJS)
+	$(CC) -o $(NAME) $(OBJS) $(CFLAGS) $(LIBFT)
+
+%.o: %.c
+	$(CC) -c $< -o $@ $(CFLAGS) $(INC)
 
 clean:
 	$(RM) $(OBJS)
@@ -22,3 +27,6 @@ dbuild:
 
 drun:
 	docker run --rm -it --platform=linux/amd64 amd64-woody-woodpacker bash
+
+$(LIBFT):
+	$(MAKE) -C libft
