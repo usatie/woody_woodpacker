@@ -217,7 +217,7 @@ int do_pack(const char *filename) {
 
   // Write to new file
   const char *new_filename = ft_strjoin(filename, ".packed");
-  int ofd = open(new_filename, O_CREAT | O_WRONLY | O_TRUNC, 0744);
+  int ofd = open(new_filename, O_CREAT | O_WRONLY | O_TRUNC, 0755);
   if (ofd < 0) {
     ft_dprintf(STDERR_FILENO, "woody_woodpacker: '%s': %s\n", new_filename,
                strerror(errno));
