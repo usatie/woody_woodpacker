@@ -131,6 +131,12 @@ const char *get_c_string(char *elf, size_t offset) {
   return str;
 }
 
+void encrypt(uint8_t key, uint8_t *data, size_t size) {
+  for (size_t i = 0; i < size; ++i) {
+    data[i] ^= key;
+  }
+}
+
 int do_pack(const char *filename) {
   int fd = open(filename, O_RDONLY);
   if (fd < 0) {
@@ -195,7 +201,7 @@ int do_pack(const char *filename) {
    *   4. Add the .packed section name to the section header string table
    * */
   Elf64_Ehdr *ehdr = (Elf64_Ehdr *)elf;
-  Elf64_Phdr *phdr = (Elf64_Phdr *)(elf + ehdr->e_phoff);
+  Elf64_Phdr *phdrs = (Elf64_Phdr *)(elf + ehdr->e_phoff);
   Elf64_Shdr *shdrs = (Elf64_Shdr *)(elf + ehdr->e_shoff); // need to add
   Elf64_Shdr *shstrtab = &shdrs[ehdr->e_shstrndx];         // need to add
   for (int i = 0; i < ehdr->e_shnum; ++i) {
@@ -216,11 +222,30 @@ int do_pack(const char *filename) {
   Elf64_Ehdr *new_ehdr = (Elf64_Ehdr *)packed;
   size_t ehdr_offset = 0;
   size_t phdr_offset = ehdr_offset + sizeof(Elf64_Ehdr);
+  Elf64_Phdr *new_phdrs = (Elf64_Phdr *)(packed + phdr_offset);
   size_t section_start_offset =
       phdr_offset + ehdr->e_phnum * sizeof(Elf64_Phdr);
   size_t next_executable_offset = 0;
   size_t next_executable_vaddr = 0;
+  int text_segment_index = -1;
+  // Loop through the program headers to find the executable segment
+  for (int i = 0; i < ehdr->e_phnum; ++i) {
+    Elf64_Phdr *phdr = &new_phdrs[i];
+    if (phdr->p_type == PT_LOAD && (phdr->p_flags & PF_X)) {
+      if (text_segment_index != -1) {
+        ft_dprintf(STDERR_FILENO, "Multiple executable segments found\n");
+        goto error_exit_do_pack_mmap;
+      }
+      text_segment_index = i;
+      encrypt(0xa5, packed + phdr->p_offset + 0x60, phdr->p_filesz - 0x60);
+    }
+  }
+  if (text_segment_index == -1) {
+    ft_dprintf(STDERR_FILENO, "No executable segment found\n");
+    goto error_exit_do_pack_mmap;
+  }
   // TODO: Sort the sections by offset
+  // Loop through the sections to find the next executable section
   for (int i = 0; i < ehdr->e_shnum + 1; ++i) {
     Elf64_Shdr *shdr = &shdrs[i];
     if (shdr->sh_type == SHT_PROGBITS && (shdr->sh_flags & SHF_EXECINSTR)) {
@@ -232,6 +257,12 @@ int do_pack(const char *filename) {
         next_executable_vaddr = shdr->sh_addr + shdr->sh_size;
       }
     }
+  }
+  if (next_executable_offset % 16 != 0) {
+    next_executable_offset += 16 - (next_executable_offset % 16);
+  }
+  if (next_executable_vaddr % 16 != 0) {
+    next_executable_vaddr += 16 - (next_executable_vaddr % 16);
   }
   ft_printf("next_executable_offset: 0x%x\n", next_executable_offset);
   ft_printf("next_executable_vaddr: 0x%x\n", next_executable_vaddr);
@@ -261,6 +292,10 @@ int do_pack(const char *filename) {
       read(lfd, packed_text,
            sizeof(packed_text)); // TODO: handle partial read or use mmap
   packed_shdr.sh_size = n;
+  new_phdrs[text_segment_index].p_filesz =
+      packed_shdr.sh_offset - new_phdrs[text_segment_index].p_offset + n;
+  new_phdrs[text_segment_index].p_memsz =
+      new_phdrs[text_segment_index].p_filesz;
   // Write to the packed region
   ft_memcpy(packed + ehdr->e_shoff + (ehdr->e_shnum) * sizeof(Elf64_Shdr),
             &packed_shdr, sizeof(Elf64_Shdr));
