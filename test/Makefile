@@ -4,7 +4,9 @@ all:
 	$(CC) -o hello hello.c
 
 run: all
-	./hello
+	../woody_woodpacker empty
+	../woody_woodpacker putc
+	../woody_woodpacker hello
 
 clean:
 	$(RM) empty putc hello

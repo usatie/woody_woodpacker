@@ -5,10 +5,11 @@ SRCS=$(wildcard src/*.c)
 OBJS=$(SRCS:%.c=%.o)
 INC=-I./include -I./libft/include
 LIBFT=libft/libft.a
+LOADER=src/loader
 
 all: $(NAME)
 
-$(NAME): $(LIBFT) $(OBJS)
+$(NAME): $(OBJS) $(LOADER) $(LIBFT)
 	$(CC) -o $(NAME) $(OBJS) $(CFLAGS) $(LIBFT)
 
 %.o: %.c
@@ -33,5 +34,8 @@ test: all
 
 $(LIBFT):
 	$(MAKE) -C libft
+
+$(LOADER): $(LOADER).nasm
+	nasm $(LOADER).nasm
 
 .PHONY: all clean fclean re dbuild drun test

@@ -19,7 +19,7 @@
 // These variables are declared as global to make it easier for checking
 // boundary
 static struct stat st;
-static void *map;
+static void *elf;
 
 // Boundary check macros
 #define CHECK_OFFSET_SIZE(offset, size, msg)                                   \
@@ -35,7 +35,7 @@ static void *map;
   }
 
 #define CHECK_BOUNDARY(ptr, index, entsize)                                    \
-  if ((__off_t)(((void *)ptr - (void *)map) + (index + 1) * entsize) >         \
+  if ((__off_t)(((void *)ptr - (void *)elf) + (index + 1) * entsize) >         \
       st.st_size) {                                                            \
     ft_dprintf(STDERR_FILENO, "CHECK_BOUNDARY failed: %s %s %s\n", #ptr,       \
                #index, #entsize);                                              \
@@ -45,10 +45,10 @@ static void *map;
 #define CHECK_CSTRING_BOUNDARY(str)                                            \
   {                                                                            \
     const char *tmp = str;                                                     \
-    while (*tmp && (__off_t)((void *)tmp - (void *)map) < st.st_size) {        \
+    while (*tmp && (__off_t)((void *)tmp - (void *)elf) < st.st_size) {        \
       ++tmp;                                                                   \
     }                                                                          \
-    if ((__off_t)(void *)((void *)tmp - (void *)map) >= st.st_size) {          \
+    if ((__off_t)(void *)((void *)tmp - (void *)elf) >= st.st_size) {          \
       ft_dprintf(STDERR_FILENO, "CHECK_CSTRING_BOUNDARY failed: %s\n", #str);  \
       exit(1);                                                                 \
     }                                                                          \
@@ -124,42 +124,11 @@ char get_symbol_type_64(const Elf64_Sym *sym, const Elf64_Shdr *shdrs,
   return '?'; // Unknown type
 }
 
-void do_pack_64bit() {
-  CHECK_SIZE(sizeof(Elf64_Ehdr), "File too small for ELF header");
-  Elf64_Ehdr *h = (Elf64_Ehdr *)map;
-#if DEBUG
-  // print ELF header
-  print_elf_header(h);
-#endif
-  // print section headers
-  if (sizeof(Elf64_Shdr) != h->e_shentsize) {
-    ft_dprintf(STDERR_FILENO, "Invalid section header size\n");
-    exit(1);
-  }
-  // Check if section header table is within bounds
-  CHECK_OFFSET_SIZE(h->e_shoff, h->e_shnum * h->e_shentsize,
-                    "Section header table extends beyond file");
-  Elf64_Shdr *sht = (Elf64_Shdr *)(map + h->e_shoff);
-  CHECK_BOUNDARY(sht, h->e_shstrndx, h->e_shentsize);
-  Elf64_Shdr *shstrtab_header = &sht[h->e_shstrndx];
-  // Check if section string table is within bounds
-  CHECK_OFFSET_SIZE(shstrtab_header->sh_offset, shstrtab_header->sh_size,
-                    "Section string table extends beyond file");
-  char *shstrtab = (char *)(map + shstrtab_header->sh_offset);
-  Elf64_Shdr *symtab_header = NULL;
-  for (int i = 0; i < h->e_shnum; ++i) {
-    CHECK_BOUNDARY(sht, i, h->e_shentsize);
-    Elf64_Shdr *current_shdr = &sht[i];
-#if DEBUG
-    print_section_header(sht, shstrtab, i);
-#endif
-    if (current_shdr->sh_type == SHT_SYMTAB) {
-      symtab_header = current_shdr;
-      // Check if symbol table is within bounds
-      CHECK_OFFSET_SIZE(symtab_header->sh_offset, symtab_header->sh_size,
-                        "Symbol table extends beyond file");
-    }
-  }
+const char *get_c_string(char *elf, size_t offset) {
+  CHECK_SIZE(offset, "Invalid offset for c string");
+  char *str = (char *)(elf + offset);
+  CHECK_CSTRING_BOUNDARY(str);
+  return str;
 }
 
 int do_pack(const char *filename) {
@@ -181,13 +150,14 @@ int do_pack(const char *filename) {
     ft_dprintf(STDERR_FILENO, "File too small to be an ELF file\n");
     goto error_exit_do_pack_fd;
   }
-  map = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-  if (map == MAP_FAILED) {
+  elf = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+  if (elf == MAP_FAILED) {
     perror("mmap");
     goto error_exit_do_pack_fd;
   }
+  close(fd); // Close the file descriptor as we have mmaped the file
   // Check if we can safely read the ELF header
-  const unsigned char *e_ident = (unsigned char *)map;
+  const unsigned char *e_ident = (unsigned char *)elf;
   if (!is_elf(e_ident)) {
     ft_dprintf(STDERR_FILENO, "Not an ELF file\n");
     goto error_exit_do_pack_mmap;
@@ -195,7 +165,7 @@ int do_pack(const char *filename) {
   // Determine the ELF class
   unsigned char elf_class = e_ident[EI_CLASS];
   if (elf_class == ELFCLASS64) {
-    do_pack_64bit();
+    ; // continue
   } else if (elf_class == ELFCLASS32) {
     ft_dprintf(STDERR_FILENO, "File architecture not suported. x86_64 only\n");
     goto error_exit_do_pack_mmap;
@@ -205,16 +175,96 @@ int do_pack(const char *filename) {
   }
 
   // Copy the file to a buffer
-  size_t packed_size = st.st_size;
+  ft_printf("size: 0x%x\n", st.st_size);
+  size_t packed_size = st.st_size + 1024 + sizeof(Elf64_Shdr);
   unsigned char *packed = malloc(packed_size);
   if (packed == NULL) {
     ft_dprintf(STDERR_FILENO, "malloc failed.\n");
     goto error_exit_do_pack_mmap;
   }
-  ft_memcpy(packed, map, st.st_size);
+  ft_memcpy(packed, elf, st.st_size);
 
   // TODO: pack the file
+  // 1. Parse the ELF file
+  /*
+   * For adding .packed section, we need to do add/modify the following:
+   *   1. Modify ELF header
+   *   2. (Optional) Modify the program header table
+   *   2. Add the .packed section header
+   *   3. Add the .packed section
+   *   4. Add the .packed section name to the section header string table
+   * */
+  Elf64_Ehdr *ehdr = (Elf64_Ehdr *)elf;
+  Elf64_Phdr *phdr = (Elf64_Phdr *)(elf + ehdr->e_phoff);
+  Elf64_Shdr *shdrs = (Elf64_Shdr *)(elf + ehdr->e_shoff); // need to add
+  Elf64_Shdr *shstrtab = &shdrs[ehdr->e_shstrndx];         // need to add
+  for (int i = 0; i < ehdr->e_shnum; ++i) {
+    Elf64_Shdr *shdr = &shdrs[i];
+    const char *name = get_c_string(elf, shstrtab->sh_offset + shdr->sh_name);
+    ft_printf("Section %d: %s (0x%x-0x%x) (addr:0x%x)\n", i, name,
+              shdr->sh_offset, shdr->sh_offset + shdr->sh_size - 1,
+              shdr->sh_addr);
+  }
+  // 2. Write the loader program to the packed file
+  /*
+   * ELF File Structure:
+   *  ELF Header
+   *  Program Header Table
+   *  [Sections]
+   *  Section Header Table
+   */
+  Elf64_Ehdr *new_ehdr = (Elf64_Ehdr *)packed;
+  size_t ehdr_offset = 0;
+  size_t phdr_offset = ehdr_offset + sizeof(Elf64_Ehdr);
+  size_t section_start_offset =
+      phdr_offset + ehdr->e_phnum * sizeof(Elf64_Phdr);
+  size_t next_executable_offset = 0;
+  size_t next_executable_vaddr = 0;
+  // TODO: Sort the sections by offset
+  for (int i = 0; i < ehdr->e_shnum + 1; ++i) {
+    Elf64_Shdr *shdr = &shdrs[i];
+    if (shdr->sh_type == SHT_PROGBITS && (shdr->sh_flags & SHF_EXECINSTR)) {
+      if (shdr->sh_offset > next_executable_offset) {
+        // Found the next executable section
+        next_executable_offset = shdr->sh_offset + shdr->sh_size;
+      }
+      if (shdr->sh_addr > next_executable_vaddr) {
+        next_executable_vaddr = shdr->sh_addr + shdr->sh_size;
+      }
+    }
+  }
+  ft_printf("next_executable_offset: 0x%x\n", next_executable_offset);
+  ft_printf("next_executable_vaddr: 0x%x\n", next_executable_vaddr);
+  Elf64_Shdr packed_shdr = {
+      .sh_name = 0, // TODO: shstrtab->sh_size + 1, and update shstrtab
+      .sh_type = SHT_PROGBITS,
+      .sh_flags = SHF_EXECINSTR | SHF_ALLOC,
+      .sh_addr = next_executable_vaddr,
+      .sh_offset = next_executable_offset,
+      .sh_size = 1024,
+      .sh_link = 0,
+      .sh_info = 0,
+      .sh_addralign = 16,
+      .sh_entsize = 0};
+  new_ehdr->e_shnum += 1;
+  new_ehdr->e_entry = next_executable_vaddr;
 
+  // 1. Read the Loader program to the memory
+  unsigned char packed_text[1024] = {};
+  int lfd = open("src/loader", O_RDONLY);
+  if (lfd < 0) {
+    ft_dprintf(STDERR_FILENO, "woody_woodpacker: '%s': %s\n", "loader",
+               strerror(errno));
+    goto error_exit_do_pack_lfd;
+  }
+  ssize_t n =
+      read(lfd, packed_text,
+           sizeof(packed_text)); // TODO: handle partial read or use mmap
+  packed_shdr.sh_size = n;
+  // Write to the packed region
+  ft_memcpy(packed + ehdr->e_shoff + (ehdr->e_shnum) * sizeof(Elf64_Shdr),
+            &packed_shdr, sizeof(Elf64_Shdr));
+  ft_memcpy(packed + next_executable_offset, packed_text, n);
   // Write to new file
   const char *new_filename = ft_strjoin(filename, ".packed");
   int ofd = open(new_filename, O_CREAT | O_WRONLY | O_TRUNC, 0755);
@@ -223,15 +273,17 @@ int do_pack(const char *filename) {
                strerror(errno));
     goto error_exit_do_pack_ofd;
   }
-  write(ofd, packed, packed_size); // TODO: handle partial write
+  write(ofd, packed, packed_size); // TODO: handle partial write or use mmap
   close(ofd);
-  close(fd);
-  munmap(map, st.st_size);
+  close(lfd);
+  munmap(elf, st.st_size);
   return 0;
 error_exit_do_pack_ofd:
   close(ofd);
+error_exit_do_pack_lfd:
+  close(lfd);
 error_exit_do_pack_mmap:
-  munmap(map, st.st_size);
+  munmap(elf, st.st_size);
 error_exit_do_pack_fd:
   close(fd);
   return -1;
