@@ -6,13 +6,14 @@ OBJS=$(SRCS:%.c=%.o)
 INC=-I./include -I./libft/include
 LIBFT=libft/libft.a
 LOADER=src/loader
+LOADER_DATA_H=src/loader_data.h
 
 all: $(NAME)
 
 $(NAME): $(OBJS) $(LOADER) $(LIBFT)
 	$(CC) -o $(NAME) $(OBJS) $(CFLAGS) $(LIBFT)
 
-%.o: %.c
+%.o: %.c $(LOADER_DATA_H)
 	$(CC) -c $< -o $@ $(CFLAGS) $(INC)
 
 clean:
@@ -37,5 +38,8 @@ $(LIBFT):
 
 $(LOADER): $(LOADER).nasm
 	nasm $(LOADER).nasm
+
+$(LOADER_DATA_H): $(LOADER)
+	xxd -i $(LOADER) | sed '1i #ifndef LOADER_DATA_H\n#define LOADER_DATA_H\n' | sed '$$a #endif /* LOADER_DATA_H */' > $(LOADER_DATA_H)
 
 .PHONY: all clean fclean re dbuild drun test
