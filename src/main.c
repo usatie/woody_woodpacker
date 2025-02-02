@@ -71,59 +71,6 @@ bool is_elf(const unsigned char *e_ident) {
   return true;
 }
 
-char get_symbol_type_64(const Elf64_Sym *sym, const Elf64_Shdr *shdrs,
-                        int num_sections) {
-  unsigned char bind = ELF64_ST_BIND(sym->st_info);
-  unsigned char type = ELF64_ST_TYPE(sym->st_info);
-  // Weak symbol
-  if (bind == STB_WEAK) {
-    if (type == STT_OBJECT) {
-      return (sym->st_shndx != SHN_UNDEF) ? 'V' : 'v';
-    }
-    return (sym->st_shndx != SHN_UNDEF) ? 'W' : 'w';
-  }
-  if (sym->st_shndx == SHN_UNDEF)
-    return 'U';
-  if (sym->st_shndx == SHN_ABS)
-    return 'A';
-  if (sym->st_shndx == SHN_COMMON)
-    return 'C';
-  if (sym->st_shndx >= SHN_LORESERVE)
-    return '?'; // TODO: Unknown type for now
-
-  // Check if section index is within bounds
-  if (sym->st_shndx >= num_sections) {
-    ft_dprintf(STDERR_FILENO, "Invalid section index: %u\n", sym->st_shndx);
-    return '?'; // Return unknown type if out of bounds
-  }
-
-  const Elf64_Shdr *sec = &shdrs[sym->st_shndx];
-  // Text section
-  if (sec->sh_flags & SHF_EXECINSTR) {
-    return (bind == STB_LOCAL) ? 't' : 'T';
-  }
-
-  // BSS
-  if ((sec->sh_type == SHT_NOBITS) && (sec->sh_flags & SHF_ALLOC) &&
-      (sec->sh_flags & SHF_WRITE)) {
-    return (bind == STB_LOCAL) ? 'b' : 'B';
-  }
-
-  // Data sections (flags: Writable and Allocated, but not Executable)
-  //               (type: not NOBITS)
-  if ((sec->sh_type != SHT_NOBITS) && (sec->sh_flags & SHF_ALLOC) &&
-      (sec->sh_flags & SHF_WRITE)) {
-    return (bind == STB_LOCAL) ? 'd' : 'D';
-  }
-  // Read-only data sections (flags: Allocated, but not Writable nor Executable)
-  if ((sec->sh_type == SHT_PROGBITS || sec->sh_type == SHT_NOTE) &&
-      (sec->sh_flags & SHF_ALLOC)) {
-    return (bind == STB_LOCAL) ? 'r' : 'R';
-  }
-
-  return '?'; // Unknown type
-}
-
 const char *get_c_string(char *elf, size_t offset) {
   CHECK_SIZE(offset, "Invalid offset for c string");
   char *str = (char *)(elf + offset);
@@ -131,10 +78,42 @@ const char *get_c_string(char *elf, size_t offset) {
   return str;
 }
 
-void encrypt(uint8_t key, uint8_t *data, size_t size) {
-  for (size_t i = 0; i < size; ++i) {
-    data[i] ^= key;
+void encrypt(uint64_t key, uint8_t *data, size_t size_in_bytes) {
+  printf("encrypt loop size: %lu\n", (size_in_bytes + 8 - 1) / 8);
+  for (size_t i = 0; i < ((size_in_bytes + 8 - 1) / 8); ++i) {
+    *((uint64_t *)(data + i * sizeof(uint64_t))) ^= key;
   }
+}
+
+void *ft_memmem(const void *haystack, size_t haystacklen, const void *needle,
+                size_t needlelen);
+
+// Inefficient implementation of memmem, but it works
+void *ft_memmem(const void *haystack, size_t haystacklen, const void *needle,
+                size_t needlelen) {
+  size_t i = 0;
+  while (i + needlelen <= haystacklen) {
+    if (memcmp(haystack + i, needle, needlelen) == 0) {
+      return (void *)(haystack + i);
+    }
+    ++i;
+  }
+  return NULL;
+}
+
+int generate_key(void *key, size_t size) {
+  int fd = open("/dev/urandom", O_RDONLY);
+  if (fd < 0) {
+    perror("open");
+    return -1;
+  }
+  ssize_t n = read(fd, key, size);
+  if (n != size) {
+    perror("read");
+    return -1;
+  }
+  close(fd);
+  return 0;
 }
 
 int do_pack(const char *filename) {
@@ -228,6 +207,11 @@ int do_pack(const char *filename) {
   size_t next_executable_offset = 0;
   size_t next_executable_vaddr = 0;
   int text_segment_index = -1;
+  uint64_t encryption_key = 0x123456789ABCDEFULL; // TODO: Generate a random key
+  if (generate_key(&encryption_key, sizeof(encryption_key)) < 0) {
+    perror("generate_key");
+    goto error_exit_do_pack_mmap;
+  }
   // Loop through the program headers to find the executable segment
   for (int i = 0; i < ehdr->e_phnum; ++i) {
     Elf64_Phdr *phdr = &new_phdrs[i];
@@ -237,7 +221,7 @@ int do_pack(const char *filename) {
         goto error_exit_do_pack_mmap;
       }
       text_segment_index = i;
-      encrypt(0xa5, packed + phdr->p_offset + 0x60, phdr->p_filesz - 0x60);
+      encrypt(encryption_key, packed + phdr->p_offset, phdr->p_filesz);
     }
   }
   if (text_segment_index == -1) {
@@ -249,15 +233,21 @@ int do_pack(const char *filename) {
   for (int i = 0; i < ehdr->e_shnum + 1; ++i) {
     Elf64_Shdr *shdr = &shdrs[i];
     if (shdr->sh_type == SHT_PROGBITS && (shdr->sh_flags & SHF_EXECINSTR)) {
-      if (shdr->sh_offset > next_executable_offset) {
+      const char *name = get_c_string(elf, shstrtab->sh_offset + shdr->sh_name);
+      ft_printf("Section %d: %s (0x%x-0x%x) (addr:0x%x)\n", i, name,
+                shdr->sh_offset, shdr->sh_offset + shdr->sh_size - 1,
+                shdr->sh_addr);
+      if (shdr->sh_offset + shdr->sh_size > next_executable_offset) {
         // Found the next executable section
         next_executable_offset = shdr->sh_offset + shdr->sh_size;
       }
-      if (shdr->sh_addr > next_executable_vaddr) {
+      if (shdr->sh_addr + shdr->sh_size > next_executable_vaddr) {
         next_executable_vaddr = shdr->sh_addr + shdr->sh_size;
       }
     }
   }
+  ft_printf("next_executable_offset: 0x%x\n", next_executable_offset);
+  ft_printf("next_executable_vaddr: 0x%x\n", next_executable_vaddr);
   if (next_executable_offset % 16 != 0) {
     next_executable_offset += 16 - (next_executable_offset % 16);
   }
@@ -296,6 +286,109 @@ int do_pack(const char *filename) {
       packed_shdr.sh_offset - new_phdrs[text_segment_index].p_offset + n;
   new_phdrs[text_segment_index].p_memsz =
       new_phdrs[text_segment_index].p_filesz;
+  // Update the dummy values in the packed text
+  // 1. Patch the address in the loader
+  {
+    uint32_t placeholder = 0x11111111;
+    void *found = ft_memmem(packed_text, n, &placeholder, sizeof(placeholder));
+    if (found == NULL) {
+      ft_dprintf(
+          STDERR_FILENO,
+          "mprotect addr placeholder (0x11111111) not found in loader\n");
+      goto error_exit_do_pack_lfd;
+    }
+    while (found) {
+      size_t rip_offset = (void *)found - (void *)packed_text +
+                          packed_shdr.sh_offset + sizeof(uint32_t);
+      int32_t addr = new_phdrs[text_segment_index].p_offset - rip_offset;
+      printf("found at: %p\n", found);
+      printf("Found at rip_offset: %lx\n", rip_offset);
+      printf("text_segment offset: 0x%lx\n",
+             new_phdrs[text_segment_index].p_offset);
+      printf("addr: 0x%x\n", addr);
+      ft_memcpy(found, &addr, sizeof(addr));
+      found = ft_memmem(packed_text, n, &placeholder, sizeof(placeholder));
+    }
+  }
+  // 2. Patch the len in the loader
+  {
+    uint32_t placeholder = 0x22222222;
+    void *found = ft_memmem(packed_text, n, &placeholder, sizeof(placeholder));
+    if (found == NULL) {
+      ft_dprintf(STDERR_FILENO,
+                 "mprotect len placeholder (0x22222222) not found in loader\n");
+      goto error_exit_do_pack_lfd;
+    }
+    while (found) {
+      Elf64_Phdr *text_phdr = &new_phdrs[text_segment_index];
+      uint32_t len = (text_phdr->p_filesz + text_phdr->p_align - 1) /
+                     text_phdr->p_align * text_phdr->p_align;
+      ft_memcpy(found, &len, sizeof(len));
+      found = ft_memmem(packed_text, n, &placeholder, sizeof(placeholder));
+    }
+  }
+  // 3. Patch dst in the loader
+  {
+    uint32_t placeholder = 0x33333333;
+    void *found = ft_memmem(packed_text, n, &placeholder, sizeof(placeholder));
+    if (found == NULL) {
+      ft_dprintf(STDERR_FILENO,
+                 "dst placeholder (0x33333333) not found in loader\n");
+      goto error_exit_do_pack_lfd;
+    }
+    size_t rip_offset = (void *)found - (void *)packed_text +
+                        packed_shdr.sh_offset + sizeof(uint32_t);
+    int32_t dst = new_phdrs[text_segment_index].p_offset - rip_offset;
+    printf("Found at rip_offset: %lx\n", rip_offset);
+    printf("text_segment offset: 0x%lx\n",
+           new_phdrs[text_segment_index].p_offset);
+    printf("dst: 0x%x\n", dst);
+    ft_memcpy(found, &dst, sizeof(dst));
+  }
+  // 4. Patch size in the loader
+  {
+    uint32_t placeholder = 0x44444444;
+    void *found = ft_memmem(packed_text, n, &placeholder, sizeof(placeholder));
+    if (found == NULL) {
+      ft_dprintf(STDERR_FILENO,
+                 "size placeholder (0x44444444) not found in loader\n");
+      goto error_exit_do_pack_lfd;
+    }
+    uint32_t size = phdrs[text_segment_index].p_filesz;
+    size = (size + 8 - 1) / 8;
+    printf("size: %d\n", size);
+    ft_memcpy(found, &size, sizeof(size));
+  }
+  // 5. Patch key in the loader
+  {
+    uint64_t placeholder = 0x5555555555555555;
+    void *found = ft_memmem(packed_text, n, &placeholder, sizeof(placeholder));
+    if (found == NULL) {
+      ft_dprintf(STDERR_FILENO,
+                 "key placeholder (0x5555555555555555) not found in loader\n");
+      goto error_exit_do_pack_lfd;
+    }
+    ft_memcpy(found, &encryption_key, sizeof(encryption_key));
+  }
+  // 6. Patch orig_ep_offset in the loader
+  {
+    uint32_t placeholder = 0x66666666;
+    void *found = ft_memmem(packed_text, n, &placeholder, sizeof(placeholder));
+    if (found == NULL) {
+      ft_dprintf(
+          STDERR_FILENO,
+          "orig_ep_offset placeholder (0x66666666) not found in loader\n");
+      goto error_exit_do_pack_lfd;
+    }
+    size_t rip_offset = (void *)found - (void *)packed_text +
+                        packed_shdr.sh_offset + sizeof(uint32_t);
+    uint32_t orig_ep_offset = ehdr->e_entry - rip_offset;
+    printf("Found at rip_offset: %lx\n", rip_offset);
+    printf("text_segment offset: 0x%lx\n",
+           new_phdrs[text_segment_index].p_offset);
+    printf("orig_ep_offset: 0x%x\n", orig_ep_offset);
+    ft_memcpy(found, &orig_ep_offset, sizeof(orig_ep_offset));
+  }
   // Write to the packed region
   ft_memcpy(packed + ehdr->e_shoff + (ehdr->e_shnum) * sizeof(Elf64_Shdr),
             &packed_shdr, sizeof(Elf64_Shdr));
@@ -309,6 +402,7 @@ int do_pack(const char *filename) {
     goto error_exit_do_pack_ofd;
   }
   write(ofd, packed, packed_size); // TODO: handle partial write or use mmap
+  printf("key_value: %lX\n", encryption_key);
   close(ofd);
   close(lfd);
   munmap(elf, st.st_size);
