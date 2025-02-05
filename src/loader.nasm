@@ -1,4 +1,6 @@
 [bits 64]
+; Q. Why this prologue is needed even though this is the entry point of the program?
+; My answer : The ELF binary is not the first one to be executed. But the Dynamic Linker is the first program to run to interpret the ELF binary. Thus, even before the entry point, some registers already have meaningful values.
 ; prologue
 push rbp
 mov rbp, rsp
@@ -27,7 +29,7 @@ mov rax, 10                            ; 10 (sys_mprotect)
 syscall
 
 ; ptr = _start;
-; for (int i = 0xdddddddd; i >= 0; --i) { *ptr = *ptr ^ 0x123456789ABCDEF; ++ptr; }
+; int i = 0x44444444; do { *ptr = *ptr ^ 0x555555555555555; ++ptr; --i; } while (i != 0)
 
 lea rdi, [rel $ + 0x33333333 + 0x7]    ; rdi = dummy decrypt dst  (0x33333333)
 mov rsi, rdi                           ; rsi = dummy decrypt src  (0x33333333)
