@@ -160,6 +160,11 @@ int do_pack(const char *filename) {
   }
   Elf64_Ehdr *ehdr = (Elf64_Ehdr *)elf;
   Elf64_Shdr *shdrs = (Elf64_Shdr *)(elf + ehdr->e_shoff); // need to add
+  // Check if the machine is x86_64
+  if (ehdr->e_machine != EM_X86_64) {
+    ft_dprintf(STDERR_FILENO, "File architecture not suported. x86_64 only\n");
+    goto error_exit_do_pack_mmap;
+  }
 
   // Copy the file to a buffer
   size_t packed_size = st.st_size + 1024 + sizeof(Elf64_Shdr);
