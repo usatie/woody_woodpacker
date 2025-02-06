@@ -197,7 +197,7 @@ int do_pack(const char *filename) {
   size_t next_executable_offset = 0;
   size_t next_executable_vaddr = 0;
   int text_segment_index = -1;
-  uint64_t encryption_key = 0x123456789ABCDEFULL; // TODO: Generate a random key
+  uint64_t encryption_key;
   if (generate_key(&encryption_key, sizeof(encryption_key)) < 0) {
     perror("generate_key");
     goto error_exit_do_pack_mmap;
@@ -369,7 +369,7 @@ int do_pack(const char *filename) {
     goto error_exit_do_pack_ofd;
   }
   write(ofd, packed, packed_size); // TODO: handle partial write or use mmap
-  printf("key_value: %lX\n", encryption_key);
+  ft_printf("key_value: %lX\n", encryption_key);
   close(ofd);
   munmap(elf, st.st_size);
   return 0;
