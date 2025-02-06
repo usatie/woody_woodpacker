@@ -158,6 +158,8 @@ int do_pack(const char *filename) {
     ft_dprintf(STDERR_FILENO, "Invalid ELF class value.\n");
     goto error_exit_do_pack_mmap;
   }
+  Elf64_Ehdr *ehdr = (Elf64_Ehdr *)elf;
+  Elf64_Shdr *shdrs = (Elf64_Shdr *)(elf + ehdr->e_shoff); // need to add
 
   // Copy the file to a buffer
   size_t packed_size = st.st_size + 1024 + sizeof(Elf64_Shdr);
@@ -178,9 +180,6 @@ int do_pack(const char *filename) {
    *   3. Add the .packed section
    *   4. Add the .packed section name to the section header string table
    * */
-  Elf64_Ehdr *ehdr = (Elf64_Ehdr *)elf;
-  Elf64_Phdr *phdrs = (Elf64_Phdr *)(elf + ehdr->e_phoff);
-  Elf64_Shdr *shdrs = (Elf64_Shdr *)(elf + ehdr->e_shoff); // need to add
   // Elf64_Shdr *shstrtab = &shdrs[ehdr->e_shstrndx];         // need to add
   //  2. Write the loader program to the packed file
   /*
@@ -203,6 +202,11 @@ int do_pack(const char *filename) {
     goto error_exit_do_pack_mmap;
   }
   // Loop through the program headers to find the executable segment
+  struct Range {
+    size_t start;
+    size_t end;
+  };
+  struct Range text_range;
   for (int i = 0; i < ehdr->e_phnum; ++i) {
     Elf64_Phdr *phdr = &new_phdrs[i];
     if (phdr->p_type == PT_LOAD && (phdr->p_flags & PF_X)) {
@@ -211,7 +215,6 @@ int do_pack(const char *filename) {
         goto error_exit_do_pack_mmap;
       }
       text_segment_index = i;
-      encrypt(encryption_key, packed + phdr->p_offset, phdr->p_filesz);
     }
   }
   if (text_segment_index == -1) {
@@ -232,6 +235,10 @@ int do_pack(const char *filename) {
       }
     }
   }
+  text_range.start = ehdr->e_entry;
+  text_range.end = next_executable_offset;
+  encrypt(encryption_key, packed + text_range.start,
+          text_range.end - text_range.start);
   if (next_executable_offset % 16 != 0) {
     next_executable_offset += 16 - (next_executable_offset % 16);
   }
@@ -260,7 +267,7 @@ int do_pack(const char *filename) {
   new_phdrs[text_segment_index].p_memsz =
       new_phdrs[text_segment_index].p_filesz;
   // Update the dummy values in the packed text
-  // 1. Patch the address in the loader
+  // 1. Patch mprotect.address in the loader
   {
     uint32_t placeholder = 0x11111111;
     void *found = ft_memmem(src_loader, sizeof(src_loader), &placeholder,
@@ -280,7 +287,7 @@ int do_pack(const char *filename) {
                         sizeof(placeholder));
     }
   }
-  // 2. Patch the len in the loader
+  // 2. Patch mprotect.len in the loader
   {
     uint32_t placeholder = 0x22222222;
     void *found = ft_memmem(src_loader, sizeof(src_loader), &placeholder,
@@ -299,22 +306,22 @@ int do_pack(const char *filename) {
                         sizeof(placeholder));
     }
   }
-  // 3. Patch dst in the loader
+  // 3. Patch decrypt.data in the loader
   {
     uint32_t placeholder = 0x33333333;
     void *found = ft_memmem(src_loader, sizeof(src_loader), &placeholder,
                             sizeof(placeholder));
     if (found == NULL) {
       ft_dprintf(STDERR_FILENO,
-                 "dst placeholder (0x33333333) not found in loader\n");
+                 "data placeholder (0x33333333) not found in loader\n");
       goto error_exit_do_pack_mmap;
     }
     size_t rip_offset = (void *)found - (void *)src_loader +
                         packed_shdr.sh_offset + sizeof(uint32_t);
-    int32_t dst = new_phdrs[text_segment_index].p_offset - rip_offset;
-    ft_memcpy(found, &dst, sizeof(dst));
+    int32_t data = text_range.start - rip_offset;
+    ft_memcpy(found, &data, sizeof(data));
   }
-  // 4. Patch size in the loader
+  // 4. Patch decrypt.size in the loader
   {
     uint32_t placeholder = 0x44444444;
     void *found = ft_memmem(src_loader, sizeof(src_loader), &placeholder,
@@ -324,7 +331,7 @@ int do_pack(const char *filename) {
                  "size placeholder (0x44444444) not found in loader\n");
       goto error_exit_do_pack_mmap;
     }
-    uint32_t size = phdrs[text_segment_index].p_filesz;
+    uint32_t size = text_range.end - text_range.start;
     size = (size + 8 - 1) / 8;
     ft_memcpy(found, &size, sizeof(size));
   }

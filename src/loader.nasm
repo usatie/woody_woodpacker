@@ -29,12 +29,13 @@ mov rax, 10                            ; 10 (sys_mprotect)
 syscall
 
 ; ptr = _start;
+; void decrypt(uint64_t key, uint8_t *data, size_t size);
 ; int i = 0x44444444; do { *ptr = *ptr ^ 0x555555555555555; ++ptr; --i; } while (i != 0)
 
-lea rdi, [rel $ + 0x33333333 + 0x7]    ; rdi = dummy decrypt dst  (0x33333333)
-mov rsi, rdi                           ; rsi = dummy decrypt src  (0x33333333)
-mov rcx, 0x44444444                    ; rcx = dummy decrypt size (0x44444444)
-mov rdx, 0x5555555555555555            ; rdx = dummy decrypt key  (0x555555555555555)
+lea rdi, [rel $ + 0x33333333 + 0x7]    ; rdi = dummy data  (0x33333333)
+mov rsi, rdi                           ; rsi = dummy data  (0x33333333)
+mov rcx, 0x44444444                    ; rcx = dummy size (0x44444444)
+mov rdx, 0x5555555555555555            ; rdx = dummy key  (0x555555555555555)
 
 loop_decrypt:
   lodsq                        ; rax = [rsi]
